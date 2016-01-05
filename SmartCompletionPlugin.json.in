@@ -1,0 +1,12 @@
+{
+    \"Name\" : \"SmartCompletionPlugin\",
+    \"Version\" : \"0.0.1\",
+    \"CompatVersion\" : \"0.0.1\",
+    \"Vendor\" : \"zccrs\",
+    \"Copyright\" : \"(C) zccrs\",
+    \"License\" : \"Put your license information here\",
+    \"Description\" : \"smart code completion\",
+    \"Url\" : \"http://www.zccrs.com\",
+    $$dependencyList
+}
+

@@ -75,7 +75,7 @@ ExtensionSystem::IPlugin::ShutdownFlag SmartCompletionPluginPlugin::aboutToShutd
     return SynchronousShutdown;
 }
 
-void SmartCompletionPluginPlugin::triggerAction()
+void SmartCompletionPluginPlugin::triggerAction() const
 {
     const Core::EditorManager *editorManager = Core::EditorManager::instance();
 
@@ -100,9 +100,33 @@ void SmartCompletionPluginPlugin::triggerAction()
     const QString &text = textEditor->toPlainText();
     int cursor_position = textEditor->textCursor().position();
 
-    Global::Symbol symbol = Global::getSymbolByString(text, cursor_position);
+    Global::CodeInfo symbol = Global::codeParse(text, cursor_position);
+
+    switch (symbol.type) {
+    case Global::PropertyType:
+        completionProperty(textEditor);
+        break;
+    default:
+        break;
+    }
 
     QMessageBox::information(Core::ICore::mainWindow(),
                              tr("word type: %1").arg(symbol.type),
                              symbol.word + LS(" ") + QString::number(symbol.word.length()));
+}
+
+void SmartCompletionPluginPlugin::completionProperty(QPlainTextEdit *editor) const
+{
+    QRegularExpression rx(LS(".+"));
+
+    const QRegularExpressionMatch &match = rx.match(editor->toPlainText(),
+                                                    editor->textCursor().position());
+
+    if(match.isValid()) {
+        Global::Property property;
+
+        Global::propertyParse(match.captured(), property);
+
+        qDebug() << property;
+    }
 }

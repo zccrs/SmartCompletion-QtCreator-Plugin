@@ -14,7 +14,7 @@
 #define LS(str) QLatin1String(str)
 #define LC(ch) QLatin1Char(ch)
 #define RX_CLASSNAME LS("(?<=class\\s+)\\w+(?=\\s+)")
-#define RX_SYMBOL LS("[\\$_a-zA-Z][\\$a-zA-Z0-9]*")
+#define RX_SYMBOL "[\\$_a-zA-Z][\\$a-zA-Z0-9]*"
 
 #define STR_PROPERTY LS("Q_PROPERTY")
 #define STR_CLASS LS("class")
@@ -37,7 +37,7 @@ public:
         CommentedOutLine
     };
 
-    struct Symbol{
+    struct CodeInfo{
         WordType type;
         QString word;
     };
@@ -46,6 +46,16 @@ public:
         BlockType type = UnknowBlock;
         int fromPosition = -1;
         int length = 0;
+    };
+
+    struct Property{
+        QString type;
+        QString name;
+        QString read;
+        QString write;
+        QString member;
+        QString reset;
+        QString notify;
     };
 
     static inline Block createBlock(BlockType type, int from = -1, int length = 0)
@@ -64,6 +74,7 @@ public:
         return str.mid(block.fromPosition, block.length);
     }
 
+    /// split into blocks of c++ code.
     static QList<Block> codeToBlocks(const QString &code, int end_position = -1);
     static int getBlockByPosition(const QList<Block> &list, int current_position);
     /// skip commented out and empty char
@@ -74,8 +85,16 @@ public:
     static QString nextSymbolByPosition(const QString &code,
                                       const QList<Block> &list,
                                       int current_position);
-    static QString getSymbolByPosition(const QString &text, int position);
-    static Symbol getSymbolByString(const QString &str, int cursor_position);
+    /// get vaild symbol(such as class name, variable name) from cursor position.
+    static QString getSymbolByPosition(const QString &text, int position,
+                                       int *start_pos = nullptr, int *end_pos = nullptr);
+    /// parse qt code, get cursor position code type(such as type is property or class defind)
+    static CodeInfo codeParse(const QString &str, int cursor_position);
+    /// parse Q_PROPERTY code. get property type&value name&get fun name&set fun name|signal name...
+    static bool propertyParse(const QString &str, Property &property);
+    /// get vaild c++ type name(such as QList<int*>*) from current position.
+    static QString getVaildTypeName(const QString &code, int from_position,
+                                    int *start_pos = nullptr, int *end_pos = nullptr);
 };
 
 QDebug operator<<(QDebug deg, const Global::Block &block)
@@ -86,9 +105,21 @@ QDebug operator<<(QDebug deg, const Global::Block &block)
     return deg;
 }
 
-QDebug operator<<(QDebug deg, const Global::Symbol &symbol)
+QDebug operator<<(QDebug deg, const Global::CodeInfo &symbol)
 {
     deg << LS("type:") << symbol.type << LS("word:") << symbol.word;
+
+    return deg;
+}
+
+QDebug operator<<(QDebug deg, const Global::Property &property)
+{
+    deg << LS("type:") << property.type
+        << LS("name:") << property.name
+        << LS("read:") << property.read
+        << LS("write:") << property.write
+        << LS("reset:") << property.reset
+        << LS("notify:") << property.notify;
 
     return deg;
 }
@@ -282,7 +313,8 @@ QString Global::nextSymbolByPosition(const QString &code,
     return LS("");
 }
 
-QString Global::getSymbolByPosition(const QString &code, int current_position)
+QString Global::getSymbolByPosition(const QString &code, int current_position,
+                                    int *start_pos, int *end_pos)
 {
     if(current_position < 0)
         return LS("");
@@ -292,9 +324,21 @@ QString Global::getSymbolByPosition(const QString &code, int current_position)
     int word_begin_position = code.lastIndexOf(not_word_rx, current_position);
     int word_end_position = code.indexOf(not_word_rx, current_position);
 
-    if(word_begin_position <= current_position && word_begin_position != word_end_position) {
-        if(word_end_position == -1)
+    if(word_begin_position <= current_position
+            && word_begin_position != word_end_position) {
+
+        if(start_pos)
+            *start_pos = word_begin_position + 1;
+
+        if(word_end_position == -1) {
+            if(end_pos)
+                *end_pos = code.length();
+
             return code.mid(word_begin_position + 1);
+        }
+
+        if(end_pos)
+            *end_pos = word_end_position;
 
         return code.mid(word_begin_position + 1,
                         word_end_position - word_begin_position - 1);
@@ -303,16 +347,16 @@ QString Global::getSymbolByPosition(const QString &code, int current_position)
     return LS("");
 }
 
-Global::Symbol Global::getSymbolByString(const QString &str, int cursor_position)
+Global::CodeInfo Global::codeParse(const QString &str, int cursor_position)
 {
     if(str.isEmpty())
-        return Symbol{UnknowType, LS("")};
+        return CodeInfo{UnknowType, LS("")};
 
     const QList<Block> &blocks = codeToBlocks(str, cursor_position);
     const Block block = blocks.last();
 
     if(block.type != CodeBlock)
-        return Symbol{UnknowType, LS("")};
+        return CodeInfo{UnknowType, LS("")};
 
     const QString word = getSymbolByPosition(getStrByBlock(str, block),
                                              cursor_position - block.fromPosition);
@@ -329,7 +373,118 @@ Global::Symbol Global::getSymbolByString(const QString &str, int cursor_position
             type = ClassNameType;
     }
 
-    return Symbol{type, word};
+    return CodeInfo{type, word};
+}
+
+bool Global::propertyParse(const QString &str, Global::Property &property)
+{
+    int offset = str.indexOf(LC('(')) + 1;
+
+    property.type = getVaildTypeName(str, offset, nullptr, &offset);
+
+    if(!property.type.isEmpty()) {
+        property.type = property.type.trimmed();
+        property.name = getSymbolByPosition(str, offset, nullptr, &offset);
+
+        if(property.name.isEmpty())
+            return false;
+
+        const QStringList list1 = QStringList() << LS("READ") << LS("WRITE") << LS("MEMBER")
+                                                << LS("RESET") << LS("NOTIFY");
+        const QList<QString*> list2 = QList<QString*>() << &property.read << &property.write
+                                                        << &property.member << &property.reset
+                                                        << &property.notify;
+
+        QRegularExpression rx;
+
+        for(int i = 0; i < list1.count(); ++i) {
+            rx.setPattern(QString(LS("\\s*%1\\s+(?<value>%2)")).arg(list1[i]).arg(LS(RX_SYMBOL)));
+
+            const QRegularExpressionMatch &match = rx.match(str, offset);
+
+            if(match.isValid())
+                *list2.at(i) = match.captured(LS("value"));
+        }
+    }
+
+    return false;
+}
+
+QString Global::getVaildTypeName(const QString &code, int offset, int *start_pos, int *end_pos)
+{
+    QString typeName;
+
+    if(offset < 0)
+        return typeName;
+
+    QRegularExpression rx(LS(RX_SYMBOL));
+
+    const QRegularExpressionMatch &match = rx.match(code, offset);
+
+    if(match.isValid()) {
+        if(start_pos)
+            *start_pos = match.capturedStart();
+
+        offset = match.capturedEnd() - 1;
+        typeName = match.captured();
+
+        if(typeName.isEmpty())
+            return typeName;
+
+        while(++offset < code.length()) {
+            const QChar &ch = code.at(offset);
+
+            switch (ch.toLatin1()) {
+            case ' ':/// intentional
+            case '*':
+                typeName.append(ch);
+                break;
+            case ':':
+                if(offset >= code.length() || code.at(++offset) != LC(':')) {
+                    return LS("");
+                }
+                typeName.append(ch);
+                /// intentional
+            case ',':/// intentional
+            case '<':{
+                typeName.append(ch);
+
+                int endPos = code.indexOf(QRegularExpression(LS("[^ ]")), offset + 1);
+
+                const QString &str = getVaildTypeName(code, endPos, nullptr, &endPos);
+
+                if(!str.isEmpty()) {
+                    if(endPos < code.length())
+                        endPos = code.indexOf(QRegularExpression(LS("[^ ]")), endPos);
+
+                    if(endPos > 0) {
+                        if(ch != LC('<')) {
+                            --endPos;
+                        } else if(endPos >= code.length() || code.at(endPos) != LC('>')) {
+                            return LS("");
+                        }
+
+                        typeName.append(code.mid(offset + 1, endPos - offset));
+                        offset = endPos;
+                        break;
+                    }
+                }
+
+                return LS("");
+            }
+            default:
+                if(end_pos)
+                    *end_pos = offset;
+
+                return typeName;
+            }
+        }
+    }
+
+    if(end_pos)
+        *end_pos = offset;
+
+    return typeName;
 }
 
 #endif // SMARTCOMPLETIONPLUGIN_GLOBAL_H

@@ -3,6 +3,8 @@
 
 #include <extensionsystem/iplugin.h>
 
+class QPlainTextEdit;
+
 namespace SmartCompletionPlugin {
 namespace Internal {
 
@@ -20,7 +22,11 @@ public:
     ShutdownFlag aboutToShutdown();
 
 private slots:
-    void triggerAction();
+    void triggerAction() const;
+
+private:
+    /// completion macro:Q_PROPERTY
+    void completionProperty(QPlainTextEdit *editor) const;
 };
 
 } // namespace Internal
